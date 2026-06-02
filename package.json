@@ -1,0 +1,124 @@
+{
+  "name": "dronehunters",
+  "productName": "DRONEHUNTERS",
+  "version": "1.9.20",
+  "private": true,
+  "description": "DRONEHUNTERS / PVOFALL — стратегія ППО на мапі України",
+  "author": "SKYHUNTERS",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SHIFTER333/DRONEHUNTER.git"
+  },
+  "main": "electron-main.cjs",
+  "scripts": {
+    "protect": "node build-protected.mjs",
+    "electron": "electron .",
+    "dist": "node tools/dist-with-update-manifest.mjs",
+    "dist:core": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --publish never",
+    "dist:publish": "node tools/dist-with-update-manifest.mjs --publish",
+    "update": "node tools/publish-update.mjs",
+    "release": "node tools/publish-release.mjs",
+    "release:upload": "node tools/upload-github-release.mjs",
+    "release:verify": "node tools/verify-release.mjs",
+    "dist:dir": "electron-builder --win --dir",
+    "dist:onefile": "npm run bundle-geo && npm run dist && node tools/pack-onefile.mjs",
+    "dist:portable": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win portable --publish never",
+    "fetch-map-tiles": "node tools/download-map-tiles.mjs",
+    "android:version-sync": "node tools/sync-android-version.mjs",
+    "bundle-geo": "node tools/bundle-geo-data.mjs",
+    "android:prepare": "node tools/prepare-android-www.mjs",
+    "android:bundle": "node tools/bundle-android-www.mjs",
+    "android:sync": "npm run android:prepare && npx cap sync android",
+    "android:open": "npx cap open android",
+    "android:build": "npm run android:sync && cd android && gradlew.bat assembleDebug",
+    "android:apk": "npm run android:build && node tools/copy-android-apk.mjs",
+    "android:publish": "node tools/publish-android-update.mjs"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@capacitor/cli": "^7.2.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "javascript-obfuscator": "^4.1.1",
+    "leaflet": "^1.9.4"
+  },
+  "build": {
+    "appId": "com.skyhunters.dronehunters",
+    "copyright": "Copyright © SKYHUNTERS",
+    "compression": "maximum",
+    "artifactName": "${productName}-Setup-${version}-x64.${ext}",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "SHIFTER333",
+        "repo": "DRONEHUNTER"
+      }
+    ],
+    "directories": {
+      "output": "dist-installer"
+    },
+    "files": [
+      "electron-main.cjs",
+      "electron-preload.cjs",
+      "index.html",
+      "drone-shahed.png",
+      "МОДЕЛЬКИ/**/*",
+      "ЗВУКИ/**/*",
+      "*.png",
+      "node_modules/leaflet/dist/**",
+      "assets/version.json",
+      "assets/geo/**",
+      "assets/geo/regiony.data.js",
+      "assets/geo/rayony.data.js",
+      "assets/map-tiles/**"
+    ],
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}-x64.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "differentialPackage": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "DRONEHUNTERS",
+      "menuCategory": false,
+      "installerLanguages": [
+        "uk_UA",
+        "ru_RU",
+        "en_US"
+      ],
+      "language": "1058",
+      "displayLanguageSelector": true,
+      "warningsAsErrors": false,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "win": {
+      "signAndEditExecutable": false,
+      "executableName": "DRONEHUNTERS",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.2.0",
+    "@capacitor/app": "^7.0.1",
+    "@capacitor/browser": "^7.0.1",
+    "@capacitor/core": "^7.2.0",
+    "@capacitor/filesystem": "^7.1.1",
+    "@capacitor/splash-screen": "^7.0.1",
+    "@capacitor/status-bar": "^7.0.1",
+    "@capgo/capacitor-updater": "^7.9.2",
+    "electron-updater": "^6.8.3"
+  }
+}

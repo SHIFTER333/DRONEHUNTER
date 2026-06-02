@@ -1,0 +1,13 @@
+node_modules/
+dist-installer/
+dist-android/
+www/
+android/local.properties
+android/.gradle/
+android/app/build/
+android/build/
+android/capacitor-cordova-android-plugins/build/
+build/update/
+tools/.gh-token
+.cursor/
+DRONEHUNTERS-Setup-*.exe

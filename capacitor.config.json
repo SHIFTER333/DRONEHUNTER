@@ -1,0 +1,23 @@
+{
+  "appId": "com.skyhunters.dronehunters",
+  "appName": "DRONEHUNTERS",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#030810"
+  },
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "CapacitorUpdater": {
+      "autoUpdate": false,
+      "resetWhenUpdate": true
+    },
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "backgroundColor": "#030810",
+      "androidSplashResourceName": "splash"
+    }
+  }
+}
