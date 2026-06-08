@@ -7,8 +7,8 @@ android {
         applicationId "com.skyhunters.dronehunters"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1921
-        versionName "1.9.21"
+        versionCode 1922
+        versionName "1.9.22"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
