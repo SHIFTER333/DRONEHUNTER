@@ -4602,7 +4602,8 @@
     function getThreatMovementSubsteps(simDt, nearBorder, timeScale) {
       let substeps = Math.max(1, Math.ceil((simDt || 0.016) / 0.012));
       if (nearBorder) substeps = Math.max(substeps, getThreatIntegrateSubsteps(true, 0, timeScale));
-      return Math.min(6, substeps);
+      const maxSub = isMobilePerfMode() ? 4 : 6;
+      return Math.min(maxSub, substeps);
     }
     function getGameModeConfig() {
       return GAME_MODES[state.gameMode] || GAME_MODES.normal;
@@ -7019,8 +7020,10 @@
       const nx = curX + (aim.aimX - curX) * blend;
       const ny = curY + (aim.aimY - curY) * blend;
       const nmag = Math.hypot(nx, ny) || 1;
-      m.vx = (nx / nmag) * sp;
-      m.vy = (ny / nmag) * sp;
+      const minSp = bs * (isUrvv ? 0.55 : 0.62);
+      const outSp = Math.max(minSp, sp);
+      m.vx = (nx / nmag) * outSp;
+      m.vy = (ny / nmag) * outSp;
       const aimH = Math.atan2(m.vy, m.vx);
       const curH = typeof m.drawHeading === "number" && isFinite(m.drawHeading) ? m.drawHeading : aimH;
       m.drawHeading = lerpAngleToward(curH, aimH, (isUrvv ? 14 : 10) * simDt);
@@ -7382,7 +7385,18 @@
       if (!state.map.ready) return true;
       if (inUkraine(x, y)) return true;
       if (d.hasEnteredUkraine) return false;
-      return true;
+      if (isForbiddenForeignAirspaceWorld(x, y)) return false;
+      return isInAllowedThreatForeignAirspaceWorld(x, y) || isInThreatSpawnCorridorWorld(x, y);
+    }
+    function threatRouteTarget(d) {
+      const route = Array.isArray(d.route) && d.route.length > 0
+        ? d.route
+        : [{ x: d.targetX, y: d.targetY }];
+      const rIdx = Math.min(d.routeIdx ?? 0, route.length - 1);
+      return route[rIdx];
+    }
+    function isMobilePerfMode() {
+      return isNativeMobileApp() || document.documentElement.classList.contains("is-mobile");
     }
     /** Мін. відстань (px) від точки до кордону України; зсередини — ukraineDepthAt. */
     function worldDistToUkraineBorder(px, py) {
@@ -7422,11 +7436,20 @@
       }
       if (inUkraine(nx, ny)) d.hasEnteredUkraine = true;
       if (!d.hasEnteredUkraine && !inUkraine(prevX, prevY)) {
+        if (!inUkraine(nx, ny) && isForbiddenForeignAirspaceWorld(nx, ny)) {
+          const dx = nx - prevX;
+          const dy = ny - prevY;
+          const dm = Math.hypot(dx, dy) || 1;
+          const slide = slideAlongThreatBorder(d, prevX, prevY, dx / dm, dy / dm, true);
+          if (Math.hypot(slide.x - prevX, slide.y - prevY) > 0.12) return slide;
+          return { x: prevX, y: prevY };
+        }
         return { x: nx, y: ny };
       }
       if (d.hasEnteredUkraine || inUkraine(prevX, prevY) || inUkraine(nx, ny)) {
         d.hasEnteredUkraine = true;
-        return clampSegmentInsideUkraine(prevX, prevY, nx, ny);
+        const leg = threatRouteTarget(d);
+        return clampSegmentInsideUkraine(prevX, prevY, nx, ny, leg.x, leg.y);
       }
       return { x: nx, y: ny };
     }
@@ -7557,7 +7580,7 @@
         }
       }
       if (totalMoved < 0.35 && frameDist > 0.2) {
-        const unstuck = tryUnstuckThreatAtBorder(d, cx, cy, simDt);
+        const unstuck = tryUnstuckThreat(d, cx, cy, simDt);
         if (unstuck) {
           cx = unstuck.x;
           cy = unstuck.y;
@@ -7566,13 +7589,23 @@
       }
       return { x: cx, y: cy, moved: totalMoved };
     }
+    function overlapPushScaleAt(x, y) {
+      if (!state.map.ready || !inUkraine(x, y)) return 1;
+      const depth = ukraineDepthAt(x, y);
+      if (depth >= 72) return 1;
+      return 0.35 + 0.65 * (depth / 72);
+    }
     /** Розсуває БПЛА, якщо невидимі кола перетинаються. */
     function resolveDroneOverlaps() {
       const list = state.drones;
       const n = list.length;
       if (n < 2) return;
+      if (isMobilePerfMode() && n > 34) return;
       const ts = state.timeScale ?? 1;
-      const iterations = isNativeMobileApp() ? 1 : (ts >= 6 ? 2 : 3);
+      let iterations = isMobilePerfMode() ? 1 : (ts >= 6 ? 2 : 3);
+      if (n > 28) iterations = Math.min(iterations, 2);
+      if (n > 44) iterations = 1;
+      const pushBase = n > 32 ? 0.26 : 0.35;
       for (let it = 0; it < iterations; it++) {
         for (let i = 0; i < n; i++) {
           const a = list[i];
@@ -7591,7 +7624,8 @@
               L = 1;
             }
             if (L >= minD) continue;
-            const push = (minD - L) * 0.35;
+            const borderMul = Math.min(overlapPushScaleAt(a.x, a.y), overlapPushScaleAt(b.x, b.y));
+            const push = (minD - L) * pushBase * borderMul;
             const ux = ox / L;
             const uy = oy / L;
             const ax0 = a.x;
@@ -7612,16 +7646,15 @@
         }
       }
     }
-    function tryUnstuckThreatAtBorder(d, x0, y0, simDt) {
+    function tryUnstuckThreat(d, x0, y0, simDt) {
       if (!state.map.ready) return null;
-      const depth = inUkraine(x0, y0) ? ukraineDepthAt(x0, y0) : 0;
-      const onUaBorder = inUkraine(x0, y0) && depth < 34;
-      if (!onUaBorder) return null;
-      const route = Array.isArray(d.route) && d.route.length > 0
-        ? d.route
-        : [{ x: d.targetX, y: d.targetY }];
-      const rIdx = Math.min(d.routeIdx ?? 0, route.length - 1);
-      const leg = route[rIdx];
+      const inside = inUkraine(x0, y0);
+      const depth = inside ? ukraineDepthAt(x0, y0) : 0;
+      const nearBorder = inside && depth < 72;
+      const preEntry = !inside && !d.hasEnteredUkraine;
+      const clusterStuck = inside && (d._lastMoveDist ?? 1) < 0.1 && (d.speed ?? 0) > 0.02;
+      if (!nearBorder && !preEntry && !clusterStuck) return null;
+      const leg = threatRouteTarget(d);
       let tgx = leg.x - x0;
       let tgy = leg.y - y0;
       const td = Math.hypot(tgx, tgy);
@@ -7632,7 +7665,7 @@
         tgx = Math.cos(d.heading);
         tgy = Math.sin(d.heading);
       }
-      const step = Math.max(2.5, (d.speed ?? 0.06) * 60 * simDt * 1.35);
+      const step = Math.max(3.2, (d.speed ?? 0.06) * 60 * simDt * 2.1);
       const dirs = [
         [tgx, tgy],
         [tgy, -tgx],
@@ -7640,6 +7673,10 @@
         [Math.cos(d.heading), Math.sin(d.heading)],
         [-Math.cos(d.heading), -Math.sin(d.heading)]
       ];
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        dirs.push([Math.cos(a), Math.sin(a)]);
+      }
       let best = null;
       let bestM = 0;
       for (const [ux, uy] of dirs) {
@@ -7652,7 +7689,7 @@
           best = c;
         }
       }
-      return bestM > 0.35 ? best : null;
+      return bestM > 0.2 ? best : null;
     }
     function pickThreatSpawnSector() {
       const keys = Object.keys(THREAT_SPAWN_SECTORS);
@@ -7856,7 +7893,7 @@
       const rect = canvas.parentElement.getBoundingClientRect();
       const w = Math.max(1, Math.floor(rect.width));
       const h = Math.max(1, Math.floor(rect.height));
-      const dprCap = isNativeMobileApp() ? 1.25 : 2.5;
+      const dprCap = isMobilePerfMode() ? 1.2 : 2.5;
       const dpr = Math.min(dprCap, Math.max(1, window.devicePixelRatio || 1));
       const bw = Math.max(1, Math.floor(w * dpr));
       const bh = Math.max(1, Math.floor(h * dpr));
@@ -7879,8 +7916,8 @@
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.imageSmoothingEnabled = true;
-      const lowEndMobile = isNativeMobileApp() && Number((navigator && navigator.deviceMemory) || 0) > 0 && Number((navigator && navigator.deviceMemory) || 0) <= 4;
-      ctx.imageSmoothingQuality = isNativeMobileApp() ? (lowEndMobile ? "low" : "medium") : "high";
+      const lowEndMobile = isMobilePerfMode() && Number((navigator && navigator.deviceMemory) || 0) > 0 && Number((navigator && navigator.deviceMemory) || 0) <= 4;
+      ctx.imageSmoothingQuality = isMobilePerfMode() ? (lowEndMobile ? "low" : "medium") : "high";
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
     function scheduleResize() {
@@ -8396,7 +8433,7 @@
       return t("pvo_unknown");
     }
     /** Найбільший крок від (x0,y0) у бік (x1,y1), щоб залишитися в межах України. */
-    function clampSegmentInsideUkraine(x0, y0, x1, y1) {
+    function clampSegmentInsideUkraine(x0, y0, x1, y1, hintTx, hintTy) {
       if (!state.map.ready) return { x: x0, y: y0 };
       const dx = x1 - x0;
       const dy = y1 - y0;
@@ -8407,23 +8444,76 @@
       let lo = 0;
       let hi = dist;
       if (inUkraine(x0 + ux * hi, y0 + uy * hi)) return { x: x0 + ux * hi, y: y0 + uy * hi };
-      if (!inUkraine(x0, y0)) return { x: x0, y: y0 };
+      if (!inUkraine(x0, y0)) {
+        const back = slideThreatIntoUkraine(x0, y0, hintTx, hintTy);
+        return back || { x: x0, y: y0 };
+      }
       for (let i = 0; i < 20 && hi - lo > 0.015; i++) {
         const mid = (lo + hi) * 0.5;
         if (inUkraine(x0 + ux * mid, y0 + uy * mid)) lo = mid;
         else hi = mid;
       }
       if (lo > 0.02) return { x: x0 + ux * lo, y: y0 + uy * lo };
-      const perp = [[-uy, ux], [uy, -ux], [ux, uy]];
-      const stepTry = Math.min(dist, 2.8);
-      for (const [px, py] of perp) {
-        for (const mul of [1, 0.7, 0.45]) {
+      const stepTry = Math.max(dist, 4.2);
+      const dirs = [];
+      if (hintTx != null && hintTy != null) {
+        let tgx = hintTx - x0;
+        let tgy = hintTy - y0;
+        const td = Math.hypot(tgx, tgy);
+        if (td > 1e-6) {
+          tgx /= td;
+          tgy /= td;
+          dirs.push([tgx, tgy], [-tgy, tgx], [tgy, -tgx]);
+        }
+      }
+      dirs.push([-uy, ux], [uy, -ux], [ux, uy]);
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2;
+        dirs.push([Math.cos(a), Math.sin(a)]);
+      }
+      let best = null;
+      let bestM = 0;
+      for (const [px, py] of dirs) {
+        for (const mul of [1, 0.78, 0.55, 0.38]) {
           const fx = x0 + px * stepTry * mul;
           const fy = y0 + py * stepTry * mul;
+          if (!inUkraine(fx, fy)) continue;
+          const moved = Math.hypot(fx - x0, fy - y0);
+          if (moved > bestM) {
+            bestM = moved;
+            best = { x: fx, y: fy };
+          }
+        }
+      }
+      if (best && bestM > 0.12) return best;
+      return { x: x0 + ux * lo, y: y0 + uy * lo };
+    }
+    /** Повертає точку всередині України, якщо БПЛА випадково опинився зовні після розсування. */
+    function slideThreatIntoUkraine(x0, y0, hintTx, hintTy) {
+      if (!state.map.ready || inUkraine(x0, y0)) return inUkraine(x0, y0) ? { x: x0, y: y0 } : null;
+      const dirs = [];
+      if (hintTx != null && hintTy != null) {
+        let tgx = hintTx - x0;
+        let tgy = hintTy - y0;
+        const td = Math.hypot(tgx, tgy);
+        if (td > 1e-6) {
+          tgx /= td;
+          tgy /= td;
+          dirs.push([tgx, tgy]);
+        }
+      }
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        dirs.push([Math.cos(a), Math.sin(a)]);
+      }
+      for (const step of [8, 5.5, 3.5, 2.2]) {
+        for (const [ux, uy] of dirs) {
+          const fx = x0 + ux * step;
+          const fy = y0 + uy * step;
           if (inUkraine(fx, fy)) return { x: fx, y: fy };
         }
       }
-      return { x: x0 + ux * lo, y: y0 + uy * lo };
+      return null;
     }
     /** Відстань від точки всередині України до кордону (мін. по 12 променях). */
     function ukraineDepthAt(px, py) {
@@ -10456,7 +10546,7 @@
         if (state.map.ready) {
           if (inUkraine(d.x, d.y)) {
             const borderDepth = ukraineDepthAt(d.x, d.y);
-            if (borderDepth < 80) borderSlow = 0.72 + 0.28 * (borderDepth / 80);
+            if (borderDepth < 80) borderSlow = 0.88 + 0.12 * (borderDepth / 80);
           }
         }
         d._borderSlow = borderSlow;
@@ -10595,18 +10685,25 @@
             sepScale = 0.55;
           }
         }
-        if (isNativeMobileApp() && state.drones.length > 28) sepScale *= 0.6;
+        if (isMobilePerfMode() && state.drones.length > 24) sepScale *= 0.55;
         if (sepScale > 0 && !d.ewHardJam) {
+          const sepRadius = isMobilePerfMode() ? 68 : 118;
+          let sepChecks = 0;
+          const sepMaxChecks = isMobilePerfMode() ? 14 : 9999;
           for (const o of state.drones) {
             if (o === d || o.ewHardJam === "orbit" || o.ewHardJam === "kill_pending") continue;
             const ox = d.x - o.x;
             const oy = d.y - o.y;
             const L = Math.hypot(ox, oy);
+            if (L > sepRadius) continue;
+            sepChecks++;
+            if (sepChecks > sepMaxChecks) break;
             const minD = droneSeparationMinDist(d, o);
             if (L < minD && L > 0.02) {
               const u = (minD - L) / minD;
-              sepX += (ox / L) * u * 0.55 * sepRamp * sepScale;
-              sepY += (oy / L) * u * 0.55 * sepRamp * sepScale;
+              const borderSepMul = nearBorderMove ? 0.42 : 1;
+              sepX += (ox / L) * u * 0.55 * sepRamp * sepScale * borderSepMul;
+              sepY += (oy / L) * u * 0.55 * sepRamp * sepScale * borderSepMul;
             }
           }
         }
@@ -10636,13 +10733,15 @@
         let clamped = { x: integrated.x, y: integrated.y };
         let moved0 = integrated.moved;
         const expectMove = Math.hypot(moveVx, moveVy) * 60 * simDt;
-        if (moved0 < Math.max(0.2, expectMove * 0.2) && expectMove > 0.15) {
+        d._lastMoveDist = moved0;
+        if (moved0 < Math.max(0.15, expectMove * 0.22) && expectMove > 0.12) {
           d.borderStuckSec = (d.borderStuckSec ?? 0) + simDt;
-          if (d.borderStuckSec >= 0.06) {
-            const unstuck = tryUnstuckThreatAtBorder(d, prevDx, prevDy, simDt);
+          if (d.borderStuckSec >= 0.02) {
+            const unstuck = tryUnstuckThreat(d, prevDx, prevDy, simDt);
             if (unstuck) {
               clamped = unstuck;
               moved0 = Math.hypot(clamped.x - prevDx, clamped.y - prevDy);
+              d._lastMoveDist = moved0;
               d.borderStuckSec = 0;
             }
           }
@@ -10672,6 +10771,18 @@
         }
       }
       resolveDroneOverlaps();
+      for (const d of state.drones) {
+        if (d.ewHardJam === "orbit" || d.ewHardJam === "kill_pending") continue;
+        if ((d._lastMoveDist ?? 1) >= 0.12 || (d.speed ?? 0) < 0.02) continue;
+        const px0 = d.x;
+        const py0 = d.y;
+        const u = tryUnstuckThreat(d, px0, py0, simDt);
+        if (u) {
+          d.x = u.x;
+          d.y = u.y;
+          d._lastMoveDist = Math.hypot(u.x - px0, u.y - py0) || 0.25;
+        }
+      }
       for (const doomed of ewDronesToRemove) {
         triggerEwJamKill(doomed);
       }
@@ -11157,8 +11268,11 @@
           m.boostLeft = Math.max(0, (m.boostLeft ?? 0) - simDt);
         }
         m.trail.push({ x: m.x, y: m.y });
-        while (m.trail.length > (isUrvv ? 48 : 28)) m.trail.shift();
-        const missileSubsteps = (state.timeScale ?? 1) >= 6 ? 1 : (simDt > 0.014 ? 2 : 1);
+        const trailCap = isMobilePerfMode() ? (isUrvv ? 22 : 12) : (isUrvv ? 48 : 28);
+        while (m.trail.length > trailCap) m.trail.shift();
+        const missileSubsteps = isMobilePerfMode()
+          ? 1
+          : ((state.timeScale ?? 1) >= 6 ? 1 : (simDt > 0.014 ? 2 : 1));
         const missileSubDt = simDt / missileSubsteps;
         for (let ms = 0; ms < missileSubsteps; ms++) {
           m.x += m.vx * 60 * missileSubDt;
